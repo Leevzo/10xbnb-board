@@ -1,0 +1,19 @@
+name: guard
+on: [push, pull_request]
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: node --test
+      - name: no lead files
+        run: |
+          set -euo pipefail
+          if find . -path './.git' -prune -o \( -name '*.csv' -o -name '*.xlsx' -o -name '*.xls' -o -name 'seed-out.json' -o -name '*build-spec*' \) -print | grep -q .; then
+            echo "data file"
+            exit 1
+          fi
+          if grep -RIn --exclude-dir=.git --exclude-dir=.github -E 'service_role|hotmail|SUPABASE_SERVICE' .; then
+            echo "secret"
+            exit 1
+          fi

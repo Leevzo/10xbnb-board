@@ -1,0 +1,61 @@
+# Copy this file to .github/workflows/nightly.yml in the PRIVATE backup repo.
+# A schedule in the public repo is turned off after 60 days without a commit.
+# Secrets, all in that private repo: SUPABASE_URL, SUPABASE_ANON_KEY,
+# BACKUP_EMAIL, BACKUP_PASSWORD, BACKUP_KEY.
+# BACKUP_KEY is the passphrase. Keep a copy in a password manager.
+# Decrypt: openssl enc -d -aes-256-cbc -pbkdf2 -in FILE -out board.json -pass env:BACKUP_KEY
+name: nightly
+on:
+  schedule:
+    - cron: "15 8 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: export
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          BACKUP_EMAIL: ${{ secrets.BACKUP_EMAIL }}
+          BACKUP_PASSWORD: ${{ secrets.BACKUP_PASSWORD }}
+          BACKUP_KEY: ${{ secrets.BACKUP_KEY }}
+        run: |
+          set -euo pipefail
+          python3 - << 'PY'
+          import json, os, urllib.request
+          base = os.environ["SUPABASE_URL"].rstrip("/")
+          anon = os.environ["SUPABASE_ANON_KEY"]
+          def call(url, method, body=None, token=None):
+              headers = {"apikey": anon, "Content-Type": "application/json"}
+              if token:
+                  headers["Authorization"] = f"Bearer {token}"
+              data = None if body is None else json.dumps(body).encode()
+              req = urllib.request.Request(url, data=data, headers=headers, method=method)
+              with urllib.request.urlopen(req) as res:
+                  raw = res.read().decode()
+                  return json.loads(raw) if raw else None
+          auth = call(f"{base}/auth/v1/token?grant_type=password", "POST", {
+              "email": os.environ["BACKUP_EMAIL"],
+              "password": os.environ["BACKUP_PASSWORD"],
+          })
+          token = auth["access_token"]
+          call(f"{base}/rest/v1/properties?select=id&limit=1", "GET", token=token)
+          board = {
+              "properties": call(f"{base}/rest/v1/properties?select=*", "GET", token=token),
+              "notes": call(f"{base}/rest/v1/notes?select=*", "GET", token=token),
+              "activity": call(f"{base}/rest/v1/activity?select=*", "GET", token=token),
+          }
+          open("/tmp/board.json", "w").write(json.dumps(board))
+          PY
+          stamp=$(date -u +%F)
+          openssl enc -aes-256-cbc -pbkdf2 -salt -in /tmp/board.json -out "board-$stamp.json.enc" -pass env:BACKUP_KEY
+          rm -f /tmp/board.json
+          git config user.email "backup@users.noreply.github.com"
+          git config user.name "backup"
+          git add "board-$stamp.json.enc"
+          git commit -m "board $stamp" || true
+          git push

@@ -1,0 +1,8 @@
+.DS_Store
+*.csv
+*.xlsx
+*.xls
+seed-out.json
+.env
+.env.*
+*.enc
