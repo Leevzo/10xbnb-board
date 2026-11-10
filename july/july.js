@@ -20,7 +20,7 @@ const ORDER = ['NEW', 'CONTACTED', 'PITCHED', 'SIGNED', 'NO'];
 const NAME = { NEW: 'NEW', CONTACTED: 'CALLED', PITCHED: 'PITCHED', SIGNED: 'SIGNED', NO: 'NO' };
 
 const state = {
-  rows: [], query: '', filter: '', open: '', needsOpen: false,
+  rows: [], query: '', filter: '', open: '', pick: '', needsOpen: false,
   colour: read(COLOUR, {}), added: read(ADDED, []), outbox: read(OUTBOX, []), seen: read(SEEN, 0),
   needs: read(NEEDS, []), did: read(DID, {}),
 };
@@ -342,12 +342,28 @@ function orb(status) {
   return canvas;
 }
 
-// Drag a house left to move its colour on, right to move it back. Each further
-// stretch moves it once more. A plain tap opens the house.
+// Hold a house and the other colours open beneath it, each with its name.
+function picker(key, status) {
+  const box = el('div', 'pick');
+  for (const next of ORDER.filter((name) => name !== status)) {
+    const node = button('', '', () => {
+      state.pick = '';
+      record({ t: 'colour', k: key, v: next });
+      paintList();
+    });
+    node.append(orb(next), NAME[next]);
+    box.append(node);
+  }
+  return box;
+}
+
+// Three ways to touch a house. A tap opens it. A press held still opens its
+// colours. A drag left moves its colour on, right moves it back, once per stretch.
 function swipe(line, key, status) {
   let fromX = 0;
   let held = false;
   let steps = 0;
+  let timer = 0;
   const canvas = line.querySelector('.orb');
   const tag = line.querySelector('.tag');
   const at = () => ORDER[(((ORDER.indexOf(status) + steps) % 5) + 5) % 5];
@@ -355,7 +371,15 @@ function swipe(line, key, status) {
     fromX = event.clientX;
     held = true;
     steps = 0;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (!held || steps) return;
+      held = false;
+      state.pick = key;
+      paintList();
+    }, 380);
   });
+  line.addEventListener('contextmenu', (event) => event.preventDefault());
   line.addEventListener('pointermove', (event) => {
     if (!held) return;
     const dx = event.clientX - fromX;
@@ -368,16 +392,21 @@ function swipe(line, key, status) {
     tag.textContent = steps ? NAME[at()] : '';
   });
   line.addEventListener('pointerup', () => {
+    clearTimeout(timer);
     if (!held) return;
     held = false;
     if (steps) {
       record({ t: 'colour', k: key, v: at() });
+    } else if (state.pick === key) {
+      state.pick = '';
     } else {
+      state.pick = '';
       state.open = state.open === key ? '' : key;
     }
     paintList();
   });
   line.addEventListener('pointercancel', () => {
+    clearTimeout(timer);
     held = false;
     steps = 0;
     draw(canvas, status);
@@ -399,6 +428,7 @@ function paintList() {
     line.append(box, title, el('span', 'tag'));
     swipe(line, key, status);
     wrap.append(line);
+    if (state.pick === key) wrap.append(picker(key, status));
     if (state.open === key) wrap.append(fold(row));
     nodes.push(wrap);
   }
