@@ -1,11 +1,68 @@
-.star { color: var(--gold); }
-.done .title { color: var(--dim); }
-.fold { padding: 0 0 8px 20px; }
-.fold p { margin: 0 0 12px; }
-.mark { display: block; color: var(--ink); }
-.mark.on { color: var(--gold); }
-.sub { color: var(--dim); margin: 0 0 16px; }
-.dots { font-family: "Joystix", monospace; font-size: 24px; letter-spacing: 6px; color: var(--gold); min-height: 36px; margin: 0 0 16px; }
-.pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 0; max-width: 320px; }
-.pad button { min-height: 64px; font-size: 24px; color: var(--ink); text-align: center; }
-.pad button.go { color: var(--gold); font-size: 16px; }
+/* The sealed July page. Sits on top of ../style.css and tightens it. */
+
+:root {
+  color-scheme: dark light;
+  --ground: #0b0b0c;
+  --ink: #f2f2f2;
+  --dim: #8c8c8c;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --ground: #f6f6f3;
+    --ink: #111111;
+    --dim: #6e6e6e;
+    --gold: #ff6a00;
+  }
+}
+
+main { padding: 16px 16px 48px; }
+p { margin: 0 0 6px; }
+
+button, a {
+  font-family: "Dogica Pixel Bold", "Joystix", monospace;
+  font-size: 11px;
+  letter-spacing: 0;
+  min-height: 40px;
+}
+
+.top { align-items: flex-start; margin: 0 0 4px; }
+
+.sq { flex: none; margin: 0; }
+
+.key { display: flex; flex-direction: column; align-items: flex-end; }
+.key button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 20px;
+  font-size: 8px;
+  color: var(--dim);
+}
+.key button.on { color: var(--ink); }
+
+input { min-height: 40px; padding: 6px 0; }
+.search { margin: 0 0 4px; }
+
+.row { margin: 0; }
+.line { display: flex; align-items: center; }
+.box { flex: none; width: 28px; display: flex; align-items: center; }
+.title { flex: 1; display: flex; align-items: center; min-height: 40px; cursor: pointer; }
+
+.fold { margin: 0; padding: 0 0 10px 28px; }
+.note { margin: 0 0 6px; color: var(--dim); }
+
+.acts { display: flex; flex-wrap: wrap; gap: 0 20px; }
+.acts a { line-height: 40px; }
+.quiet { color: var(--dim); }
+
+.dots {
+  font-family: "Dogica Pixel Bold", "Joystix", monospace;
+  font-size: 24px;
+  letter-spacing: 6px;
+  color: var(--gold);
+  min-height: 36px;
+  margin: 12px 0;
+}
+.pad { display: grid; grid-template-columns: repeat(3, 1fr); max-width: 300px; }
+.pad button { min-height: 60px; font-size: 20px; color: var(--ink); text-align: center; }
+.pad button.go { color: var(--gold); font-size: 11px; }
