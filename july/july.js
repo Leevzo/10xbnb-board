@@ -141,6 +141,7 @@ const shared = Boolean(LEDGER_URL && LEDGER_KEY);
 let aes = null;
 let room = '';
 let syncing = false;
+let again = false;
 
 function apply(event) {
   if (event.t === 'colour' && ORDER.includes(event.v)) state.colour[event.k] = event.v;
@@ -189,7 +190,8 @@ async function openLine(text) {
 
 // Send what this phone changed, then take what the others changed.
 async function sync() {
-  if (!aes || syncing) return;
+  if (!aes) return;
+  if (syncing) { again = true; return; }
   syncing = true;
   try {
     while (state.outbox.length) {
@@ -208,6 +210,7 @@ async function sync() {
     }
   } catch { /* no signal: the outbox keeps it for next time */ }
   syncing = false;
+  if (again) { again = false; sync(); }
 }
 
 async function join(rawKey) {
