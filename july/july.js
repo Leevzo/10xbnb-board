@@ -14,12 +14,15 @@ const ADDED = '10xbnb-july-added';
 const OUTBOX = '10xbnb-july-outbox';
 const SEEN = '10xbnb-july-seen';
 const JOINED = '10xbnb-july-joined';
+const NEEDS = '10xbnb-july-needs';
+const DID = '10xbnb-july-did';
 const ORDER = ['NEW', 'CONTACTED', 'PITCHED', 'SIGNED', 'NO'];
 const NAME = { NEW: 'NEW', CONTACTED: 'CALLED', PITCHED: 'PITCHED', SIGNED: 'SIGNED', NO: 'NO' };
 
 const state = {
-  rows: [], query: '', filter: '', open: '',
+  rows: [], query: '', filter: '', open: '', pick: '', needsOpen: false,
   colour: read(COLOUR, {}), added: read(ADDED, []), outbox: read(OUTBOX, []), seen: read(SEEN, 0),
+  needs: read(NEEDS, []), did: read(DID, {}),
 };
 
 // ---- small things
@@ -148,6 +151,10 @@ function apply(event) {
   if (event.t === 'add' && event.row && !state.added.some((row) => row.id === event.row.id)) {
     state.added.unshift(event.row);
   }
+  if (event.t === 'need' && event.text && !state.needs.some((need) => need.id === event.id)) {
+    state.needs.push({ id: event.id, text: String(event.text).slice(0, 300) });
+  }
+  if (event.t === 'did') state.did[event.id] = Boolean(event.v);
 }
 
 function persist() {
@@ -155,6 +162,8 @@ function persist() {
   write(ADDED, state.added);
   write(OUTBOX, state.outbox);
   write(SEEN, state.seen);
+  write(NEEDS, state.needs);
+  write(DID, state.did);
 }
 
 // Every change made on this phone goes through here.
@@ -206,7 +215,7 @@ async function sync() {
     }
     if (lines.length) {
       persist();
-      if (document.querySelector('#list')) paintList();
+      if (document.querySelector('#list')) { paintNext(); paintList(); }
     }
   } catch { /* no signal: the outbox keeps it for next time */ }
   syncing = false;
@@ -283,6 +292,21 @@ function fold(row) {
   return box;
 }
 
+// The box opens the other colours beneath it, each with its name.
+function picker(key, status) {
+  const box = el('div', 'pick');
+  for (const next of ORDER.filter((name) => name !== status)) {
+    const node = button('', '', () => {
+      state.pick = '';
+      record({ t: 'colour', k: key, v: next });
+      paintList();
+    });
+    node.append(el('span', `sq ${next}`), NAME[next]);
+    box.append(node);
+  }
+  return box;
+}
+
 function paintList() {
   const nodes = [];
   for (const row of allRows().filter(matches)) {
@@ -291,7 +315,7 @@ function paintList() {
     const wrap = el('div', 'row');
     const line = el('div', 'line');
     const box = button('box', '', () => {
-      record({ t: 'colour', k: key, v: ORDER[(ORDER.indexOf(status) + 1) % ORDER.length] });
+      state.pick = state.pick === key ? '' : key;
       paintList();
     });
     box.append(el('span', `sq ${status}`));
@@ -303,6 +327,7 @@ function paintList() {
     });
     line.append(box, title);
     wrap.append(line);
+    if (state.pick === key) wrap.append(picker(key, status));
     if (state.open === key) wrap.append(fold(row));
     nodes.push(wrap);
   }
@@ -362,6 +387,44 @@ function openAdd() {
   veil.querySelector('input').focus();
 }
 
+// ---- the next step
+// The business needs, in order. The top line is the first one not yet done.
+
+function paintNext() {
+  const host = document.querySelector('#next');
+  const todo = state.needs.find((need) => !state.did[need.id]);
+  const head = button('next', 'NEXT', () => {
+    state.needsOpen = !state.needsOpen;
+    paintNext();
+  });
+  if (todo) head.append(el('span', '', todo.text));
+  const nodes = [head];
+  if (state.needsOpen) {
+    for (const need of state.needs) {
+      const done = Boolean(state.did[need.id]);
+      const line = el('div', done ? 'line done' : 'line');
+      const box = button('box', '', () => {
+        record({ t: 'did', id: need.id, v: !done });
+        paintNext();
+      });
+      box.append(el('span', `sq ${done ? 'SIGNED' : 'NEW'}`));
+      line.append(box, el('div', 'need', need.text));
+      nodes.push(line);
+    }
+    const input = el('input');
+    Object.assign(input, { type: 'text', placeholder: 'add a step', autocomplete: 'off', enterKeyHint: 'done' });
+    input.addEventListener('keydown', (event) => {
+      const text = input.value.trim();
+      if (event.key !== 'Enter' || !text) return;
+      record({ t: 'need', id: `need:${Date.now()}${Math.random().toString(36).slice(2, 6)}`, text });
+      paintNext();
+      document.querySelector('#next input').focus();
+    });
+    nodes.push(input);
+  }
+  host.replaceChildren(...nodes);
+}
+
 function paint() {
   const key = el('div', 'key');
   for (const status of ORDER) {
@@ -383,7 +446,10 @@ function paint() {
   });
   const list = el('div');
   list.id = 'list';
-  app.replaceChildren(top, search, list, button('plus', '+', openAdd));
+  const next = el('div');
+  next.id = 'next';
+  app.replaceChildren(top, next, search, list, button('plus', '+', openAdd));
+  paintNext();
   paintList();
 }
 
@@ -423,6 +489,25 @@ async function start() {
 for (const key of Object.keys(read('10xbnb-july-called', {}))) {
   if (!state.colour[key]) state.colour[key] = 'CONTACTED';
 }
+
+// The page renews itself when a newer one is on the shelf, so the link and the
+// home screen icon never need replacing.
+let built = '';
+async function renew() {
+  try {
+    const tags = await Promise.all(['./july.js', './july.css'].map(async (file) => {
+      const res = await fetch(file, { method: 'HEAD', cache: 'no-cache' });
+      return res.headers.get('etag') || res.headers.get('last-modified') || '';
+    }));
+    const now = tags.join('|');
+    const busy = document.querySelector('.veil') || document.activeElement?.tagName === 'INPUT';
+    if (built && now !== built && !busy) location.reload();
+    if (!built) built = now;
+  } catch { /* no signal */ }
+}
+renew();
+setInterval(renew, 600000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) renew(); });
 
 window.addEventListener('hashchange', start);
 start();

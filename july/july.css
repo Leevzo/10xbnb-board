@@ -27,7 +27,12 @@ button, a {
 
 .top { align-items: flex-start; margin: 0 0 4px; }
 
-.sq { flex: none; margin: 0; }
+.sq { flex: none; margin: 0; background: var(--c); }
+.sq.NEW { --c: var(--dim); }
+.sq.CONTACTED { --c: var(--mind); }
+.sq.PITCHED { --c: var(--play); }
+.sq.SIGNED { --c: var(--will); }
+.sq.NO { --c: var(--heart); }
 
 .key { display: flex; flex-direction: column; align-items: flex-end; }
 .key button {
@@ -45,10 +50,50 @@ input { min-height: 40px; padding: 6px 0; }
 
 .row { margin: 0; }
 .line { display: flex; align-items: center; }
-.box { flex: none; width: 28px; display: flex; align-items: center; }
-.title { flex: 1; display: flex; align-items: center; min-height: 40px; cursor: pointer; }
+/* The box is a key you press: it sits proud of the page and goes down under a finger. */
+.box { flex: none; width: 40px; min-height: 44px; display: flex; align-items: center; }
+.box .sq, .pick .sq {
+  width: 22px;
+  height: 22px;
+  box-shadow: 3px 3px 0 color-mix(in srgb, var(--c) 40%, var(--ground));
+}
+.box:active .sq, .pick button:active .sq { transform: translate(3px, 3px); box-shadow: none; }
+.title {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  cursor: pointer;
+  font-family: "Pixelta", "W95FA", sans-serif;
+  font-size: 22px;
+  line-height: 1.1;
+}
 
-.fold { margin: 0; padding: 0 0 10px 28px; }
+.pick { display: flex; flex-direction: column; align-items: flex-start; padding: 0 0 6px; }
+.pick button {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-height: 40px;
+  color: var(--ink);
+  animation: pop 150ms steps(3) both;
+}
+.pick button:nth-child(2) { animation-delay: 40ms; }
+.pick button:nth-child(3) { animation-delay: 80ms; }
+.pick button:nth-child(4) { animation-delay: 120ms; }
+@keyframes pop {
+  from { opacity: 0; transform: translateY(-14px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) { .pick button { animation: none; } }
+
+.next { display: flex; align-items: center; gap: 12px; width: 100%; }
+.next span, .need { font-family: "W95FA", sans-serif; font-size: 16px; color: var(--ink); }
+.need { flex: 1; }
+.done .need { color: var(--dim); text-decoration: line-through; }
+#next { margin: 0 0 4px; }
+
+.fold { margin: 0; padding: 0 0 10px 40px; }
 .note { margin: 0 0 6px; color: var(--dim); }
 
 .acts { display: flex; flex-wrap: wrap; gap: 0 20px; }
@@ -71,11 +116,12 @@ input { min-height: 40px; padding: 6px 0; }
   position: fixed;
   right: 8px;
   bottom: calc(8px + env(safe-area-inset-bottom));
-  width: 44px;
-  height: 44px;
-  font-size: 16px;
+  width: 60px;
+  height: 60px;
+  font-size: 32px;
   text-align: center;
 }
+.plus:active { transform: translate(3px, 3px); }
 .veil {
   position: fixed;
   inset: 0;
