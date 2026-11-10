@@ -5,7 +5,41 @@
 
 const app = document.querySelector('#app');
 const MARKS = '10xbnb-july-called';
-const state = { rows: [], made: '', query: '', filter: 'ALL', open: -1, marks: loadMarks() };
+const ADDED = '10xbnb-july-added';
+const state = {
+  rows: [], made: '', query: '', filter: 'ALL', open: -1,
+  marks: loadMarks(), added: loadAdded(), adding: false,
+};
+
+// Houses added on this phone. They live here until they are sent and sealed in.
+function loadAdded() {
+  try {
+    const list = JSON.parse(localStorage.getItem(ADDED) || '[]');
+    return Array.isArray(list) ? list : [];
+  } catch { return []; }
+}
+
+function saveAdded() {
+  try { localStorage.setItem(ADDED, JSON.stringify(state.added)); } catch { /* private window */ }
+}
+
+function everyRow() {
+  return [...state.added, ...state.rows];
+}
+
+function keyOf(row) {
+  return row.listing_url || row.id || '';
+}
+
+async function send(row) {
+  const text = ['10XBNB ADD', row.listing_url, row.address, row.owner_name, row.owner_phone, ...(row.notes || [])]
+    .filter(Boolean).join('\n');
+  if (navigator.share) {
+    try { await navigator.share({ text }); } catch { /* he closed the sheet */ }
+    return;
+  }
+  location.href = `sms:?&body=${encodeURIComponent(text)}`;
+}
 
 function loadMarks() {
   try { return JSON.parse(localStorage.getItem(MARKS) || '{}') || {}; } catch { return {}; }
@@ -141,8 +175,8 @@ function place(row) {
 
 function matches(row) {
   if (state.filter === 'STARRED' && !row.starred) return false;
-  if (state.filter === 'CALLED' && !state.marks[row.listing_url]) return false;
-  if (state.filter === 'TO CALL' && (state.marks[row.listing_url] || !row.owner_phone)) return false;
+  if (state.filter === 'CALLED' && !state.marks[keyOf(row)]) return false;
+  if (state.filter === 'TO CALL' && (state.marks[keyOf(row)] || !row.owner_phone)) return false;
   const q = state.query.trim().toLowerCase();
   if (!q) return true;
   const hay = [row.listing_title, row.owner_name, row.owner_phone, place(row), row.zip, ...(row.notes || [])]
@@ -152,20 +186,28 @@ function matches(row) {
 
 function fold(row) {
   const box = el('div', 'fold');
+  if (row.mine) {
+    box.append(el('p', 'meta', `added on this phone ${row.added || ''}. Send it so it joins the shared list.`));
+    const out = el('button', 'mark on', 'SEND TO LEVI');
+    out.addEventListener('click', () => send(row));
+    box.append(out);
+  }
   if (row.owner_phone) {
-    const digits = row.owner_phone.replace(/\D/g, '');
-    box.append(link(`CALL ${row.owner_phone}`, `tel:+1${digits}`));
-    box.append(link('TEXT', `sms:+1${digits}`));
+    const digits = row.owner_phone.replace(/\D/g, '').slice(-10);
+    if (digits.length === 10) {
+      box.append(link(`CALL ${row.owner_phone}`, `tel:+1${digits}`));
+      box.append(link('TEXT', `sms:+1${digits}`));
+    }
   }
   const listing = safeHttp(row.listing_url);
   if (listing) box.append(link('LISTING', listing));
   const report = safeHttp(row.report_url || '');
   if (report) box.append(link('REPORT', report));
-  const called = Boolean(state.marks[row.listing_url]);
+  const called = Boolean(state.marks[keyOf(row)]);
   const mark = el('button', called ? 'mark on' : 'mark', called ? '[X] CALLED' : '[ ] CALLED');
   mark.addEventListener('click', () => {
-    if (called) delete state.marks[row.listing_url];
-    else state.marks[row.listing_url] = new Date().toISOString().slice(0, 10);
+    if (called) delete state.marks[keyOf(row)];
+    else state.marks[keyOf(row)] = new Date().toISOString().slice(0, 10);
     saveMarks();
     paintList();
   });
@@ -178,15 +220,17 @@ function fold(row) {
 function paintList() {
   const list = document.querySelector('#list');
   const count = document.querySelector('#count');
-  const shown = state.rows.map((row, i) => [row, i]).filter(([row]) => matches(row));
-  count.textContent = `${shown.length} of ${state.rows.length}`;
+  const rows = everyRow();
+  const shown = rows.map((row, i) => [row, i]).filter(([row]) => matches(row));
+  count.textContent = `${shown.length} of ${rows.length}`;
   const nodes = [];
   for (const [row, i] of shown) {
-    const wrap = el('div', state.marks[row.listing_url] ? 'row done' : 'row');
+    const wrap = el('div', state.marks[keyOf(row)] ? 'row done' : 'row');
     const hit = el('div', 'hit');
     const title = el('div', 'title');
     title.append(el('span', `sq ${row.status || 'NEW'}`));
     if (row.starred) title.append(el('span', 'star', '* '));
+    if (row.mine) title.append(el('span', 'star', '+ '));
     title.append(place(row) || row.listing_title || 'LISTING');
     hit.append(title);
     const who = [row.owner_name, row.owner_phone].filter(Boolean).join(' · ');
@@ -203,6 +247,58 @@ function paintList() {
   for (const button of document.querySelectorAll('.counts button')) {
     button.classList.toggle('on', button.textContent === state.filter);
   }
+}
+
+function field(name, placeholder, kind) {
+  const input = el('input', 'search');
+  input.type = kind || 'text';
+  input.placeholder = placeholder;
+  input.autocomplete = 'off';
+  input.dataset.name = name;
+  return input;
+}
+
+function addForm() {
+  const box = el('div', 'add');
+  const fields = [
+    field('listing_url', 'listing link', 'url'),
+    field('address', 'address, city, state'),
+    field('owner_name', 'owner name'),
+    field('owner_phone', 'phone', 'tel'),
+    field('note', 'note'),
+  ];
+  const say = el('p', 'meta', '');
+  const save = el('button', 'mark on', 'SAVE AND SEND');
+  save.addEventListener('click', async () => {
+    const got = {};
+    for (const input of fields) got[input.dataset.name] = input.value.trim();
+    if (!got.listing_url && !got.address) {
+      say.textContent = 'It needs a link or an address.';
+      return;
+    }
+    const row = {
+      id: `added:${Date.now()}`,
+      mine: true,
+      added: new Date().toLocaleDateString('en-CA'),
+      status: 'NEW',
+      listing_title: got.address || got.listing_url,
+      listing_url: safeHttp(got.listing_url),
+      address: got.address,
+      owner_name: got.owner_name,
+      owner_phone: got.owner_phone,
+      notes: got.note ? [got.note] : [],
+    };
+    if (!row.listing_url && got.listing_url) row.notes.push(got.listing_url);
+    state.added.unshift(row);
+    saveAdded();
+    state.adding = false;
+    paint();
+    await send(row);
+  });
+  const cancel = el('button', 'mark', 'CANCEL');
+  cancel.addEventListener('click', () => { state.adding = false; paint(); });
+  box.append(...fields, say, save, cancel);
+  return box;
 }
 
 function paint() {
@@ -231,7 +327,13 @@ function paint() {
   count.id = 'count';
   const list = el('div');
   list.id = 'list';
-  app.replaceChildren(top, sub, search, counts, count, list);
+  const plus = el('button', 'mark', '+ ADD A HOUSE');
+  plus.addEventListener('click', () => { state.adding = true; paint(); });
+  if (state.adding) {
+    app.replaceChildren(top, el('p', 'sub', 'A new house. It saves on this phone and opens a message to send.'), addForm());
+    return;
+  }
+  app.replaceChildren(top, sub, plus, search, counts, count, list);
   paintList();
 }
 
