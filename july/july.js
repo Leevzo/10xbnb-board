@@ -1,19 +1,25 @@
 // The sealed July list.
 // Two halves open it: the part of the link after the #, and a number code typed
 // once. Neither is sent anywhere. After the first opening this browser keeps the
-// key. The colour of a house and any house added here stay on this phone.
+// key. A colour changed or a house added here is sealed with that same key and
+// appended to the shared ledger, so every phone that holds the key sees it.
+
+import { LEDGER_URL, LEDGER_KEY } from './config.js';
 
 const app = document.querySelector('#app');
 const ITER = 600000;
 const KEEP = '10xbnb-july-key';
 const COLOUR = '10xbnb-july-status';
 const ADDED = '10xbnb-july-added';
+const OUTBOX = '10xbnb-july-outbox';
+const SEEN = '10xbnb-july-seen';
+const JOINED = '10xbnb-july-joined';
 const ORDER = ['NEW', 'CONTACTED', 'PITCHED', 'SIGNED', 'NO'];
 const NAME = { NEW: 'NEW', CONTACTED: 'CALLED', PITCHED: 'PITCHED', SIGNED: 'SIGNED', NO: 'NO' };
 
 const state = {
   rows: [], query: '', filter: '', open: '', adding: false,
-  colour: read(COLOUR, {}), added: read(ADDED, []),
+  colour: read(COLOUR, {}), added: read(ADDED, []), outbox: read(OUTBOX, []), seen: read(SEEN, 0),
 };
 
 // ---- small things
@@ -21,7 +27,7 @@ const state = {
 function read(name, empty) {
   try {
     const value = JSON.parse(localStorage.getItem(name));
-    return value && typeof value === 'object' ? value : empty;
+    return value === null || typeof value !== typeof empty ? empty : value;
   } catch { return empty; }
 }
 
@@ -52,6 +58,14 @@ function link(text, href) {
   return a;
 }
 
+function b64(bytes) {
+  return btoa(String.fromCharCode(...bytes));
+}
+
+function unb64(text) {
+  return Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+}
+
 function safeHttp(url) {
   try {
     const u = new URL(url);
@@ -63,9 +77,8 @@ function safeHttp(url) {
 // ---- the lock
 
 function fromB64url(text) {
-  const b64 = text.replace(/-/g, '+').replace(/_/g, '/');
-  const bin = atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4));
-  return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  const plain = text.replace(/-/g, '+').replace(/_/g, '/');
+  return unb64(plain + '='.repeat((4 - (plain.length % 4)) % 4));
 }
 
 // File: salt 16, iv 12, then the sealed list.
@@ -103,8 +116,9 @@ function pad(half, buf) {
       show('NO');
       return;
     }
-    try { localStorage.setItem(KEEP, btoa(String.fromCharCode(...rawKey))); } catch { /* private window */ }
+    try { localStorage.setItem(KEEP, b64(rawKey)); } catch { /* private window */ }
     paint();
+    join(rawKey);
   };
   const grid = el('div', 'pad');
   for (const name of ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'DEL', '0', 'OPEN']) {
@@ -117,6 +131,101 @@ function pad(half, buf) {
     }));
   }
   app.replaceChildren(el('h1', '', '10XBNB'), dots, grid);
+}
+
+// ---- the shared ledger
+// Every change is one sealed line appended to a room only the key can name.
+// The shelf holds noise. Nothing there is ever edited or erased.
+
+const shared = Boolean(LEDGER_URL && LEDGER_KEY);
+let aes = null;
+let room = '';
+let syncing = false;
+
+function apply(event) {
+  if (event.t === 'colour' && ORDER.includes(event.v)) state.colour[event.k] = event.v;
+  if (event.t === 'add' && event.row && !state.added.some((row) => row.id === event.row.id)) {
+    state.added.unshift(event.row);
+  }
+}
+
+function persist() {
+  write(COLOUR, state.colour);
+  write(ADDED, state.added);
+  write(OUTBOX, state.outbox);
+  write(SEEN, state.seen);
+}
+
+// Every change made on this phone goes through here.
+function record(event) {
+  apply(event);
+  if (shared) state.outbox.push(event);
+  persist();
+  sync();
+}
+
+async function rpc(name, args) {
+  const res = await fetch(`${LEDGER_URL}/rest/v1/rpc/${name}`, {
+    method: 'POST',
+    headers: { apikey: LEDGER_KEY, Authorization: `Bearer ${LEDGER_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(args),
+  });
+  if (!res.ok) throw new Error(name);
+  return res.json();
+}
+
+async function sealLine(event) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const text = new TextEncoder().encode(JSON.stringify(event));
+  const body = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aes, text));
+  return b64([...iv, ...body]);
+}
+
+async function openLine(text) {
+  const buf = unb64(text);
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: buf.slice(0, 12) }, aes, buf.slice(12));
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+
+// Send what this phone changed, then take what the others changed.
+async function sync() {
+  if (!aes || syncing) return;
+  syncing = true;
+  try {
+    while (state.outbox.length) {
+      await rpc('ledger_write', { p_room: room, p_body: await sealLine(state.outbox[0]) });
+      state.outbox.shift();
+      write(OUTBOX, state.outbox);
+    }
+    const lines = await rpc('ledger_read', { p_room: room, p_after: state.seen });
+    for (const line of lines) {
+      try { apply(await openLine(line.body)); } catch { /* not sealed by this key */ }
+      state.seen = Math.max(state.seen, line.id);
+    }
+    if (lines.length) {
+      persist();
+      if (document.querySelector('#list')) paintList();
+    }
+  } catch { /* no signal: the outbox keeps it for next time */ }
+  syncing = false;
+}
+
+async function join(rawKey) {
+  if (!shared) return;
+  aes = await crypto.subtle.importKey('raw', rawKey, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  const named = new Uint8Array([...new TextEncoder().encode('10xbnb-july-room'), ...rawKey]);
+  room = b64(new Uint8Array(await crypto.subtle.digest('SHA-256', named)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  if (!read(JOINED, false)) {
+    // What this phone already held before the ledger existed goes up once.
+    for (const [k, v] of Object.entries(state.colour)) state.outbox.push({ t: 'colour', k, v });
+    for (const row of [...state.added].reverse()) state.outbox.push({ t: 'add', row });
+    write(JOINED, true);
+    persist();
+  }
+  sync();
+  setInterval(sync, 20000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) sync(); });
 }
 
 // ---- the list
@@ -163,7 +272,7 @@ function fold(row) {
   if (listing) acts.append(link('LISTING', listing));
   const analyzer = safeHttp(row.report_url || '');
   if (analyzer) acts.append(link('ANALYZER', analyzer));
-  if (row.mine) acts.append(button('', 'SEND', () => send(row)));
+  if (row.mine && !shared) acts.append(button('', 'SEND', () => send(row)));
   if (acts.children.length) box.append(acts);
   for (const line of [row.last_contacted, ...(row.notes || [])]) {
     if (line) box.append(el('p', 'note', line));
@@ -179,8 +288,7 @@ function paintList() {
     const wrap = el('div', 'row');
     const line = el('div', 'line');
     const box = button('box', '', () => {
-      state.colour[key] = ORDER[(ORDER.indexOf(status) + 1) % ORDER.length];
-      write(COLOUR, state.colour);
+      record({ t: 'colour', k: key, v: ORDER[(ORDER.indexOf(status) + 1) % ORDER.length] });
       paintList();
     });
     box.append(el('span', `sq ${status}`));
@@ -219,7 +327,7 @@ function addForm() {
     if (!got.listing_url && !got.address) return;
     const url = safeHttp(got.listing_url);
     const row = {
-      id: `added:${Date.now()}`,
+      id: `added:${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
       mine: true,
       status: 'NEW',
       listing_title: got.address || got.listing_url,
@@ -229,14 +337,13 @@ function addForm() {
       owner_phone: got.owner_phone,
       notes: [got.note, url ? '' : got.listing_url].filter(Boolean),
     };
-    state.added.unshift(row);
-    write(ADDED, state.added);
     state.adding = false;
+    record({ t: 'add', row });
     paint();
-    send(row);
+    if (!shared) send(row);
   };
   const acts = el('div', 'acts');
-  acts.append(button('', 'SEND', save), button('quiet', 'BACK', () => { state.adding = false; paint(); }));
+  acts.append(button('', shared ? 'SAVE' : 'SEND', save), button('quiet', 'BACK', () => { state.adding = false; paint(); }));
   const box = el('div', 'add');
   box.append(...fields, acts);
   return box;
@@ -291,9 +398,10 @@ async function start() {
     return;
   }
   try {
-    const kept = Uint8Array.from(atob(localStorage.getItem(KEEP) || ''), (c) => c.charCodeAt(0));
+    const kept = unb64(localStorage.getItem(KEEP) || '');
     state.rows = await openWith(kept, buf);
     paint();
+    join(kept);
     return;
   } catch { /* not opened here yet */ }
   let half = null;
