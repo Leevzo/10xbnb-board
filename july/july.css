@@ -43,36 +43,11 @@ button, a {
 input { min-height: var(--g5); padding: var(--g1) 0; }
 .search { margin: 0 0 var(--g2); }
 
-/* ---- the colour block: an 8 by 8 sprite, lit from the upper left */
+/* ---- the orb: a round 12 by 12 sprite, drawn by the page, shown at twice its size */
 
-.sq {
-  --u: 2px;
-  --hi: color-mix(in srgb, var(--c) 45%, #ffffff);
-  --lo: color-mix(in srgb, var(--c) 50%, #000000);
-  flex: none;
-  margin: 0;
-  width: 10px;
-  height: 10px;
-  background: var(--c);
-  box-shadow: inset var(--u) var(--u) 0 var(--hi), inset calc(-1 * var(--u)) calc(-1 * var(--u)) 0 var(--lo);
-  clip-path: polygon(
-    0 var(--u), var(--u) var(--u), var(--u) 0,
-    calc(100% - var(--u)) 0, calc(100% - var(--u)) var(--u), 100% var(--u),
-    100% calc(100% - var(--u)), calc(100% - var(--u)) calc(100% - var(--u)), calc(100% - var(--u)) 100%,
-    var(--u) 100%, var(--u) calc(100% - var(--u)), 0 calc(100% - var(--u))
-  );
-}
-.sq.NEW { --c: var(--dim); }
-.sq.CONTACTED { --c: var(--mind); }
-.sq.PITCHED { --c: var(--play); }
-.sq.SIGNED { --c: var(--will); }
-.sq.NO { --c: var(--heart); }
-
-.box .sq, .pick .sq { --u: 3px; width: 24px; height: 24px; }
-.box:active .sq, .pick button:active .sq {
-  box-shadow: inset var(--u) var(--u) 0 var(--lo), inset calc(-1 * var(--u)) calc(-1 * var(--u)) 0 var(--hi);
-  transform: translate(var(--u), var(--u));
-}
+.orb { flex: none; width: 24px; height: 24px; image-rendering: pixelated; }
+.key .orb { width: 12px; height: 12px; }
+.box:active .orb { transform: translate(2px, 2px); }
 
 /* ---- the top */
 
@@ -96,8 +71,10 @@ input { min-height: var(--g5); padding: var(--g1) 0; }
 
 /* ---- a house */
 
-.row { margin: 0; }
-.line { display: flex; align-items: center; }
+.row { margin: 0 0 var(--g4); }
+.line { display: flex; align-items: center; touch-action: pan-y; user-select: none; -webkit-user-select: none; cursor: pointer; }
+.tag { flex: none; font-family: "Dogica Pixel Bold", monospace; font-size: 11px; color: var(--ink); }
+#next .line { margin: 0; }
 .box { flex: none; width: var(--g5); min-height: var(--g5); display: flex; align-items: center; }
 .title {
   flex: 1;
@@ -106,27 +83,9 @@ input { min-height: var(--g5); padding: var(--g1) 0; }
   flex-wrap: wrap;
   gap: 0 var(--g2);
   padding: var(--g1) 0;
-  cursor: pointer;
 }
 .name { font-family: "PixelPurl", "W95FA", sans-serif; font-size: var(--g4); line-height: 1; color: var(--ink); }
 .town { font-size: 16px; line-height: 1; color: var(--dim); }
-
-.pick { display: flex; flex-direction: column; align-items: flex-start; padding: 0 0 var(--g1); }
-.pick button {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  color: var(--ink);
-  animation: pop 150ms steps(3) both;
-}
-.pick button:nth-child(2) { animation-delay: 40ms; }
-.pick button:nth-child(3) { animation-delay: 80ms; }
-.pick button:nth-child(4) { animation-delay: 120ms; }
-@keyframes pop {
-  from { opacity: 0; transform: translateY(calc(-1 * var(--g3))); }
-  to { opacity: 1; transform: none; }
-}
-@media (prefers-reduced-motion: reduce) { .pick button { animation: none; } }
 
 .fold { margin: 0; padding: 0 0 var(--g3) var(--g5); }
 .note { margin: 0 0 var(--g1); color: var(--dim); }

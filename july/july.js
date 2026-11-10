@@ -20,7 +20,7 @@ const ORDER = ['NEW', 'CONTACTED', 'PITCHED', 'SIGNED', 'NO'];
 const NAME = { NEW: 'NEW', CONTACTED: 'CALLED', PITCHED: 'PITCHED', SIGNED: 'SIGNED', NO: 'NO' };
 
 const state = {
-  rows: [], query: '', filter: '', open: '', pick: '', needsOpen: false,
+  rows: [], query: '', filter: '', open: '', needsOpen: false,
   colour: read(COLOUR, {}), added: read(ADDED, []), outbox: read(OUTBOX, []), seen: read(SEEN, 0),
   needs: read(NEEDS, []), did: read(DID, {}),
 };
@@ -298,19 +298,91 @@ function fold(row) {
   return box;
 }
 
-// The box opens the other colours beneath it, each with its name.
-function picker(key, status) {
-  const box = el('div', 'pick');
-  for (const next of ORDER.filter((name) => name !== status)) {
-    const node = button('', '', () => {
-      state.pick = '';
-      record({ t: 'colour', k: key, v: next });
-      paintList();
-    });
-    node.append(el('span', `sq ${next}`), NAME[next]);
-    box.append(node);
+// ---- the orb
+// Each colour is a round 12 by 12 sprite with its own pixel pattern, so a state
+// reads by shape as well as by hue.
+
+const HUE = { NEW: '--dim', CONTACTED: '--mind', PITCHED: '--play', SIGNED: '--will', NO: '--heart' };
+const ROUND = [4, 8, 10, 10, 12, 12, 12, 12, 10, 10, 8, 4];
+const WEAVE = {
+  NEW: (x, y) => (x + y) % 2 === 0,
+  CONTACTED: (x, y) => y % 3 === 0,
+  PITCHED: (x, y) => (x + y) % 4 < 2,
+  SIGNED: (x, y) => x % 3 === 1 && y % 3 === 1,
+  NO: (x, y) => Math.abs(x - y) < 2 || Math.abs(x + y - 11) < 2,
+};
+
+function blend(hex, toward, share) {
+  const from = [1, 3, 5].map((at) => parseInt(hex.slice(at, at + 2), 16));
+  return `rgb(${from.map((part) => Math.round(part + (toward - part) * share)).join(',')})`;
+}
+
+function draw(canvas, status) {
+  const hue = getComputedStyle(document.documentElement).getPropertyValue(HUE[status]).trim();
+  const tones = [hue, blend(hue, 0, 0.45), blend(hue, 255, 0.6)];
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, 12, 12);
+  for (let y = 0; y < 12; y += 1) {
+    const from = (12 - ROUND[y]) / 2;
+    for (let x = from; x < from + ROUND[y]; x += 1) {
+      const shine = (x === 3 || x === 4) && (y === 2 || y === 3);
+      const light = status === 'SIGNED' ? 2 : 1;
+      ctx.fillStyle = tones[shine ? 2 : (WEAVE[status](x, y) ? light : 0)];
+      ctx.fillRect(x, y, 1, 1);
+    }
   }
-  return box;
+  canvas.dataset.status = status;
+}
+
+function orb(status) {
+  const canvas = el('canvas', 'orb');
+  canvas.width = 12;
+  canvas.height = 12;
+  draw(canvas, status);
+  return canvas;
+}
+
+// Drag a house left to move its colour on, right to move it back. Each further
+// stretch moves it once more. A plain tap opens the house.
+function swipe(line, key, status) {
+  let fromX = 0;
+  let held = false;
+  let steps = 0;
+  const canvas = line.querySelector('.orb');
+  const tag = line.querySelector('.tag');
+  const at = () => ORDER[(((ORDER.indexOf(status) + steps) % 5) + 5) % 5];
+  line.addEventListener('pointerdown', (event) => {
+    fromX = event.clientX;
+    held = true;
+    steps = 0;
+  });
+  line.addEventListener('pointermove', (event) => {
+    if (!held) return;
+    const dx = event.clientX - fromX;
+    const far = Math.abs(dx);
+    const now = far < 16 ? 0 : (1 + Math.floor((far - 16) / 36)) * (dx < 0 ? 1 : -1);
+    if (now === steps) return;
+    if (!steps) line.setPointerCapture(event.pointerId);
+    steps = now;
+    draw(canvas, at());
+    tag.textContent = steps ? NAME[at()] : '';
+  });
+  line.addEventListener('pointerup', () => {
+    if (!held) return;
+    held = false;
+    if (steps) {
+      record({ t: 'colour', k: key, v: at() });
+    } else {
+      state.open = state.open === key ? '' : key;
+    }
+    paintList();
+  });
+  line.addEventListener('pointercancel', () => {
+    held = false;
+    steps = 0;
+    draw(canvas, status);
+    tag.textContent = '';
+  });
 }
 
 function paintList() {
@@ -320,21 +392,13 @@ function paintList() {
     const status = statusOf(row);
     const wrap = el('div', 'row');
     const line = el('div', 'line');
-    const box = button('box', '', () => {
-      state.pick = state.pick === key ? '' : key;
-      paintList();
-    });
-    box.append(el('span', `sq ${status}`));
-    box.setAttribute('aria-label', NAME[status]);
+    const box = el('div', 'box');
+    box.append(orb(status));
     const title = el('div', 'title');
-    title.append(el('span', 'name', `${row.starred ? '* ' : ''}${titleOf(row)}`), el('span', 'town', townOf(row)));
-    title.addEventListener('click', () => {
-      state.open = state.open === key ? '' : key;
-      paintList();
-    });
-    line.append(box, title);
+    title.append(el('span', 'name', titleOf(row)), el('span', 'town', townOf(row)));
+    line.append(box, title, el('span', 'tag'));
+    swipe(line, key, status);
     wrap.append(line);
-    if (state.pick === key) wrap.append(picker(key, status));
     if (state.open === key) wrap.append(fold(row));
     nodes.push(wrap);
   }
@@ -414,7 +478,7 @@ function paintNext() {
         record({ t: 'did', id: need.id, v: !done });
         paintNext();
       });
-      box.append(el('span', `sq ${done ? 'SIGNED' : 'NEW'}`));
+      box.append(orb(done ? 'SIGNED' : 'NEW'));
       line.append(box, el('div', 'need', need.text));
       nodes.push(line);
     }
@@ -459,7 +523,7 @@ function paint() {
       paintList();
     });
     node.dataset.status = status;
-    node.append(el('span', `sq ${status}`));
+    node.append(orb(status));
     key.append(node);
   }
   const top = el('div', 'top');
