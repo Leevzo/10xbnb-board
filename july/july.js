@@ -18,7 +18,7 @@ const ORDER = ['NEW', 'CONTACTED', 'PITCHED', 'SIGNED', 'NO'];
 const NAME = { NEW: 'NEW', CONTACTED: 'CALLED', PITCHED: 'PITCHED', SIGNED: 'SIGNED', NO: 'NO' };
 
 const state = {
-  rows: [], query: '', filter: '', open: '', adding: false,
+  rows: [], query: '', filter: '', open: '',
   colour: read(COLOUR, {}), added: read(ADDED, []), outbox: read(OUTBOX, []), seen: read(SEEN, 0),
 };
 
@@ -312,7 +312,7 @@ function paintList() {
   }
 }
 
-function addForm() {
+function addForm(close) {
   const fields = [
     ['listing_url', 'listing link', 'url'],
     ['address', 'address, city, state', 'text'],
@@ -340,26 +340,29 @@ function addForm() {
       owner_phone: got.owner_phone,
       notes: [got.note, url ? '' : got.listing_url].filter(Boolean),
     };
-    state.adding = false;
     record({ t: 'add', row });
-    paint();
+    close();
+    paintList();
     if (!shared) send(row);
   };
   const acts = el('div', 'acts');
-  acts.append(button('', shared ? 'SAVE' : 'SEND', save), button('quiet', 'BACK', () => { state.adding = false; paint(); }));
+  acts.append(button('', shared ? 'SAVE' : 'SEND', save), button('quiet', 'BACK', close));
   const box = el('div', 'add');
   box.append(...fields, acts);
   return box;
 }
 
+// The plus opens the form over the list, dimmed and blurred behind it.
+function openAdd() {
+  const veil = el('div', 'veil');
+  const close = () => veil.remove();
+  veil.addEventListener('click', (event) => { if (event.target === veil) close(); });
+  veil.append(addForm(close));
+  app.append(veil);
+  veil.querySelector('input').focus();
+}
+
 function paint() {
-  const head = el('h1', '', '10XBNB');
-  if (state.adding) {
-    app.replaceChildren(head, addForm());
-    return;
-  }
-  const left = el('div');
-  left.append(head, button('', 'ADD', () => { state.adding = true; paint(); }));
   const key = el('div', 'key');
   for (const status of ORDER) {
     const node = button('', NAME[status], () => {
@@ -371,7 +374,7 @@ function paint() {
     key.append(node);
   }
   const top = el('div', 'top');
-  top.append(left, key);
+  top.append(el('h1', '', '10XBNB'), key);
   const search = el('input', 'search');
   Object.assign(search, { type: 'search', placeholder: 'search', autocomplete: 'off', value: state.query });
   search.addEventListener('input', () => {
@@ -380,7 +383,7 @@ function paint() {
   });
   const list = el('div');
   list.id = 'list';
-  app.replaceChildren(top, search, list);
+  app.replaceChildren(top, search, list, button('plus', '+', openAdd));
   paintList();
 }
 
