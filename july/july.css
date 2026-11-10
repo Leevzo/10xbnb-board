@@ -1,0 +1,11 @@
+.star { color: var(--gold); }
+.done .title { color: var(--dim); }
+.fold { padding: 0 0 8px 20px; }
+.fold p { margin: 0 0 12px; }
+.mark { display: block; color: var(--ink); }
+.mark.on { color: var(--gold); }
+.sub { color: var(--dim); margin: 0 0 16px; }
+.dots { font-family: "Joystix", monospace; font-size: 24px; letter-spacing: 6px; color: var(--gold); min-height: 36px; margin: 0 0 16px; }
+.pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 0; max-width: 320px; }
+.pad button { min-height: 64px; font-size: 24px; color: var(--ink); text-align: center; }
+.pad button.go { color: var(--gold); font-size: 16px; }
