@@ -122,6 +122,7 @@ function pad(half, buf) {
     try { localStorage.setItem(KEEP, b64(rawKey)); } catch { /* private window */ }
     paint();
     join(rawKey);
+    takeSteps();
   };
   const grid = el('div', 'pad');
   for (const name of ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'DEL', '0', 'OPEN']) {
@@ -254,15 +255,20 @@ function statusOf(row) {
   return state.colour[keyOf(row)] || row.status || 'NEW';
 }
 
+// The title is the one phrase that names the house. The town sits beside it.
 function titleOf(row) {
-  return [row.address, row.city, row.state].filter(Boolean).join(', ') || row.listing_title || 'LISTING';
+  return row.address || row.listing_title || 'LISTING';
+}
+
+function townOf(row) {
+  return [row.city, row.state].filter(Boolean).join(', ');
 }
 
 function matches(row) {
   if (state.filter && statusOf(row) !== state.filter) return false;
   const q = state.query.trim().toLowerCase();
   if (!q) return true;
-  return [row.listing_title, row.owner_name, row.owner_phone, titleOf(row), row.zip, ...(row.notes || [])]
+  return [row.listing_title, row.owner_name, row.owner_phone, row.address, townOf(row), row.zip, ...(row.notes || [])]
     .filter(Boolean).join(' ').toLowerCase().includes(q);
 }
 
@@ -320,7 +326,8 @@ function paintList() {
     });
     box.append(el('span', `sq ${status}`));
     box.setAttribute('aria-label', NAME[status]);
-    const title = el('div', 'title', `${row.starred ? '* ' : ''}${titleOf(row)}`);
+    const title = el('div', 'title');
+    title.append(el('span', 'name', `${row.starred ? '* ' : ''}${titleOf(row)}`), el('span', 'town', townOf(row)));
     title.addEventListener('click', () => {
       state.open = state.open === key ? '' : key;
       paintList();
@@ -425,6 +432,25 @@ function paintNext() {
   host.replaceChildren(...nodes);
 }
 
+// A link can carry steps after a ~ in its tail. They are added once, sealed like
+// any other change, and the tail is cleaned. The tail never leaves the phone.
+function takeSteps() {
+  const [half, extra] = location.hash.slice(1).split('~');
+  if (!extra) return;
+  history.replaceState(null, '', `${location.pathname}${half ? `#${half}` : ''}`);
+  let steps = [];
+  try { steps = JSON.parse(new TextDecoder().decode(fromB64url(extra))); } catch { return; }
+  if (!Array.isArray(steps)) return;
+  for (const step of steps.slice(0, 24)) {
+    const text = typeof step === 'string' ? step.trim() : '';
+    let sum = 5381;
+    for (const ch of text) sum = (sum * 33 + ch.codePointAt(0)) >>> 0;
+    const id = `need:${sum.toString(36)}`;
+    if (text && !state.needs.some((need) => need.id === id)) record({ t: 'need', id, text });
+  }
+  paintNext();
+}
+
 function paint() {
   const key = el('div', 'key');
   for (const status of ORDER) {
@@ -474,10 +500,11 @@ async function start() {
     state.rows = await openWith(kept, buf);
     paint();
     join(kept);
+    takeSteps();
     return;
   } catch { /* not opened here yet */ }
   let half = null;
-  try { half = fromB64url(location.hash.slice(1)); } catch { half = null; }
+  try { half = fromB64url(location.hash.slice(1).split('~')[0]); } catch { half = null; }
   if (!half || half.length !== 32) {
     shut('Open it from the link.');
     return;
