@@ -17,6 +17,7 @@ const JOINED = '10xbnb-july-joined';
 const NEEDS = '10xbnb-july-needs';
 const DID = '10xbnb-july-did';
 const NOTES = '10xbnb-july-notes';
+try { localStorage.removeItem('10xbnb-july-undo'); } catch { /* the old capped list */ }
 const EDITS = '10xbnb-july-edits';
 const GONE = '10xbnb-july-gone';
 const ORDERS = '10xbnb-july-orders';
@@ -29,7 +30,11 @@ const state = {
   colour: read(COLOUR, {}), added: read(ADDED, []), outbox: read(OUTBOX, []), seen: read(SEEN, 0),
   needs: read(NEEDS, []), did: read(DID, {}),
   notes: read(NOTES, {}), edits: read(EDITS, {}), gone: read(GONE, {}), orders: read(ORDERS, {}),
-  editing: '', armed: '', undo: read(UNDO, []),
+  editing: '', armed: '', undo: (() => {
+    // UNDO goes back without limit for as long as the app stays open, through
+    // the page's own reloads; a fresh open starts clean.
+    try { const v = JSON.parse(sessionStorage.getItem(UNDO)); return Array.isArray(v) ? v : []; } catch { return []; }
+  })(),
 };
 
 // ---- small things
@@ -303,14 +308,17 @@ function matches(row) {
 function act(event, back) {
   record(event);
   state.undo.push(back);
-  if (state.undo.length > 20) state.undo.shift();
-  write(UNDO, state.undo);
+  keepUndo();
   paintUndo();
+}
+
+function keepUndo() {
+  try { sessionStorage.setItem(UNDO, JSON.stringify(state.undo)); } catch { /* private window */ }
 }
 
 function undo() {
   const back = state.undo.pop();
-  write(UNDO, state.undo);
+  keepUndo();
   if (!back) return;
   state.armed = '';
   state.editing = '';
