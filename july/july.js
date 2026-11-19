@@ -363,15 +363,14 @@ function notesOf(row) {
 }
 
 // The grip on the left: hold it and move the line up or down.
-function grab(grip, line, list, repaint) {
+function grab(grip, line, list, repaint, kind = 'item', settle = (ids) => ids) {
   grip.addEventListener('pointerdown', (event) => {
     event.preventDefault();
     event.stopPropagation();
     const host = line.parentElement;
-    const lines = () => [...host.children].filter((node) => node.classList.contains('item'));
+    const lines = () => [...host.children].filter((node) => node.classList.contains(kind));
     const was = lines().map((node) => node.dataset.id);
     const before = was.join('|');
-    grip.setPointerCapture(event.pointerId);
     line.classList.add('lift');
     state.armed = '';
     const move = (ev) => {
@@ -384,17 +383,22 @@ function grab(grip, line, list, repaint) {
       else if (others.length) others[others.length - 1].after(line);
     };
     const drop = () => {
-      grip.removeEventListener('pointermove', move);
-      grip.removeEventListener('pointerup', drop);
-      grip.removeEventListener('pointercancel', drop);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', drop);
+      window.removeEventListener('pointercancel', drop);
       line.classList.remove('lift');
       const ids = lines().map((node) => node.dataset.id);
-      if (ids.join('|') !== before) act({ t: 'order', list, ids }, { t: 'order', list, ids: was });
+      if (ids.join('|') !== before) {
+        const back = state.orders[list] ? [...state.orders[list]] : was;
+        act({ t: 'order', list, ids: settle(ids) }, { t: 'order', list, ids: back });
+      }
       repaint();
     };
-    grip.addEventListener('pointermove', move);
-    grip.addEventListener('pointerup', drop);
-    grip.addEventListener('pointercancel', drop);
+    // Moving the line moves the grip, which loses any hold on the pointer, so
+    // the page itself listens for the move and the letting go.
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', drop);
+    window.addEventListener('pointercancel', drop);
   });
 }
 
@@ -454,6 +458,35 @@ function itemLine(list, item, repaint, { lead = [], cls = '' } = {}) {
   return line;
 }
 
+// A note is a field: tap it and change the words. Leaving it keeps the change.
+// Emptying it takes the note out. A house with no note shows one empty field.
+function noteField(key, note) {
+  const field = el('textarea', 'notefield');
+  Object.assign(field, { value: note ? note.text : '', placeholder: 'note', rows: 1, autocomplete: 'off', enterKeyHint: 'done' });
+  field.dataset.hold = '1';
+  const fit = () => { field.style.height = 'auto'; field.style.height = `${field.scrollHeight}px`; };
+  requestAnimationFrame(fit);
+  field.addEventListener('input', fit);
+  field.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); field.blur(); }
+  });
+  field.addEventListener('blur', () => {
+    const text = field.value.trim();
+    if (!note) {
+      if (!text) return;
+      const id = fresh('note');
+      act({ t: 'note', k: key, id, text }, { t: 'gone', id, v: true });
+      note = { id, text };
+      return;
+    }
+    if (text === note.text) return;
+    if (!text) act({ t: 'gone', id: note.id, v: true }, { t: 'gone', id: note.id, v: false });
+    else act({ t: 'edit', id: note.id, text }, { t: 'edit', id: note.id, text: note.text });
+    note = { id: note.id, text };
+  });
+  return field;
+}
+
 function send(row) {
   const text = ['10XBNB ADD', row.listing_url, row.address, row.owner_name, row.owner_phone, ...(row.notes || [])]
     .filter(Boolean).join('\n');
@@ -477,19 +510,9 @@ function fold(row) {
   if (row.last_contacted) box.append(el('p', 'note', row.last_contacted));
   const key = keyOf(row);
   const notes = el('div', 'notes');
-  for (const note of notesOf(row)) notes.append(itemLine(`notes:${key}`, note, paintList));
-  const input = el('input', 'addnote');
-  Object.assign(input, { type: 'text', placeholder: 'add a note', autocomplete: 'off', enterKeyHint: 'done' });
-  input.dataset.hold = '1';
-  input.addEventListener('keydown', (event) => {
-    const text = input.value.trim();
-    if (event.key !== 'Enter' || !text) return;
-    const id = fresh('note');
-    act({ t: 'note', k: key, id, text }, { t: 'gone', id, v: true });
-    paintList();
-    document.querySelector('.fold .addnote')?.focus();
-  });
-  notes.append(input);
+  const list = notesOf(row);
+  for (const note of list) notes.append(noteField(key, note));
+  if (!list.length) notes.append(noteField(key, null));
   box.append(notes);
   return box;
 }
@@ -610,18 +633,52 @@ function swipe(line, key, status) {
   });
 }
 
+// Houses stand in the order last set by a grip. A house the order never met
+// (a new one) stands at the top.
+function housesNow() {
+  const want = state.orders.houses || [];
+  const place = (key) => want.indexOf(key);
+  return allRows()
+    .filter((row) => !state.gone[`house:${keyOf(row)}`])
+    .map((row, at) => ({ row, at, place: place(keyOf(row)) }))
+    .sort((a, b) => a.place - b.place || a.at - b.at)
+    .map((item) => item.row);
+}
+
+// While the list is filtered or searched, a move reorders only the houses in
+// sight; every hidden house keeps its own place.
+function settleHouses(shown) {
+  const all = housesNow().map(keyOf);
+  const seen = new Set(shown);
+  let next = 0;
+  return all.map((key) => (seen.has(key) ? shown[next++] : key));
+}
+
 function paintList() {
   const nodes = [];
-  for (const row of allRows().filter(matches)) {
+  for (const row of housesNow().filter(matches)) {
     const key = keyOf(row);
     const status = statusOf(row);
     const wrap = el('div', 'row');
+    wrap.dataset.id = key;
     const line = el('div', 'line');
+    const grip = el('span', 'grip', '=');
+    grip.setAttribute('aria-label', 'hold and move this house');
+    grab(grip, wrap, 'houses', paintList, 'row', settleHouses);
     const box = el('div', 'box');
     box.append(orb(status));
     const title = el('div', 'title');
     title.append(el('span', 'name', titleOf(row)), el('span', 'town', townOf(row)));
-    line.append(box, title, el('span', 'tag'));
+    const armed = state.armed === `house:${key}`;
+    const cut = button(armed ? 'cut armed' : 'cut', armed ? 'DEL?' : 'x', () => {
+      if (!armed) { state.armed = `house:${key}`; paintList(); return; }
+      state.armed = '';
+      act({ t: 'gone', id: `house:${key}`, v: true }, { t: 'gone', id: `house:${key}`, v: false });
+      paintList();
+    });
+    cut.setAttribute('aria-label', armed ? 'tap again to take this house out' : 'take this house out');
+    cut.addEventListener('pointerdown', (event) => event.stopPropagation());
+    line.append(grip, box, title, el('span', 'tag'), cut);
     swipe(line, key, status);
     wrap.append(line);
     if (state.pick === key) wrap.append(picker(key, status));
