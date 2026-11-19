@@ -16,6 +16,11 @@ const SEEN = '10xbnb-july-seen';
 const JOINED = '10xbnb-july-joined';
 const NEEDS = '10xbnb-july-needs';
 const DID = '10xbnb-july-did';
+const NOTES = '10xbnb-july-notes';
+const EDITS = '10xbnb-july-edits';
+const GONE = '10xbnb-july-gone';
+const ORDERS = '10xbnb-july-orders';
+const UNDO = '10xbnb-july-undo';
 const ORDER = ['NEW', 'CONTACTED', 'PITCHED', 'SIGNED', 'NO'];
 const NAME = { NEW: 'NEW', CONTACTED: 'CALLED', PITCHED: 'PITCHED', SIGNED: 'SIGNED', NO: 'NO' };
 
@@ -23,6 +28,8 @@ const state = {
   rows: [], query: '', filter: '', open: '', pick: '', needsOpen: false,
   colour: read(COLOUR, {}), added: read(ADDED, []), outbox: read(OUTBOX, []), seen: read(SEEN, 0),
   needs: read(NEEDS, []), did: read(DID, {}),
+  notes: read(NOTES, {}), edits: read(EDITS, {}), gone: read(GONE, {}), orders: read(ORDERS, {}),
+  editing: '', armed: '', undo: read(UNDO, []),
 };
 
 // ---- small things
@@ -156,6 +163,15 @@ function apply(event) {
     state.needs.push({ id: event.id, text: String(event.text).slice(0, 300) });
   }
   if (event.t === 'did') state.did[event.id] = Boolean(event.v);
+  if (event.t === 'note' && event.k && event.id && event.text) {
+    const list = state.notes[event.k] || (state.notes[event.k] = []);
+    if (!list.some((note) => note.id === event.id)) list.push({ id: event.id, text: String(event.text).slice(0, 600) });
+  }
+  if (event.t === 'edit' && event.id && event.text) state.edits[event.id] = String(event.text).slice(0, 600);
+  if (event.t === 'gone' && event.id) state.gone[event.id] = event.v !== false;
+  if (event.t === 'order' && event.list && Array.isArray(event.ids)) {
+    state.orders[event.list] = event.ids.slice(0, 500).map(String);
+  }
 }
 
 function persist() {
@@ -165,6 +181,10 @@ function persist() {
   write(SEEN, state.seen);
   write(NEEDS, state.needs);
   write(DID, state.did);
+  write(NOTES, state.notes);
+  write(EDITS, state.edits);
+  write(GONE, state.gone);
+  write(ORDERS, state.orders);
 }
 
 // Every change made on this phone goes through here.
@@ -216,7 +236,9 @@ async function sync() {
     }
     if (lines.length) {
       persist();
-      if (document.querySelector('#list')) { paintNext(); paintList(); }
+      // A line being typed or dragged is left alone; it repaints when the hand lets go.
+      const held = document.activeElement?.dataset?.hold || document.querySelector('.lift');
+      if (document.querySelector('#list') && !held) { paintNext(); paintList(); }
     }
   } catch { /* no signal: the outbox keeps it for next time */ }
   syncing = false;
@@ -268,8 +290,168 @@ function matches(row) {
   if (state.filter && statusOf(row) !== state.filter) return false;
   const q = state.query.trim().toLowerCase();
   if (!q) return true;
-  return [row.listing_title, row.owner_name, row.owner_phone, row.address, townOf(row), row.zip, ...(row.notes || [])]
+  return [row.listing_title, row.owner_name, row.owner_phone, row.address, townOf(row), row.zip, ...notesOf(row).map((note) => note.text)]
     .filter(Boolean).join(' ').toLowerCase().includes(q);
+}
+
+// ---- lines a hand can change
+// A step or a note can be reworded, lifted out, or moved. Each change is one
+// more sealed line on the shelf; every earlier line is still there.
+
+// A change to a line is recorded with the change that puts it back. UNDO plays
+// the last one. Putting a line back is itself one more sealed line.
+function act(event, back) {
+  record(event);
+  state.undo.push(back);
+  if (state.undo.length > 20) state.undo.shift();
+  write(UNDO, state.undo);
+  paintUndo();
+}
+
+function undo() {
+  const back = state.undo.pop();
+  write(UNDO, state.undo);
+  if (!back) return;
+  state.armed = '';
+  state.editing = '';
+  record(back);
+  paintNext();
+  paintList();
+  paintUndo();
+}
+
+function paintUndo() {
+  const node = document.querySelector('.undo');
+  if (node) node.hidden = !state.undo.length;
+}
+
+function hash(text) {
+  let sum = 5381;
+  for (const ch of text) sum = (sum * 33 + ch.codePointAt(0)) >>> 0;
+  return sum.toString(36);
+}
+
+function fresh(kind) {
+  return `${kind}:${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+// What stands in a list now: lifted lines out, reworded lines in their new
+// words, in the order last set. A line the order never met goes to the end.
+function arrange(list, items) {
+  const want = state.orders[list] || [];
+  const place = (id) => { const at = want.indexOf(id); return at < 0 ? want.length : at; };
+  return items
+    .filter((item) => !state.gone[item.id])
+    .map((item, at) => ({ id: item.id, text: state.edits[item.id] || item.text, at }))
+    .sort((a, b) => place(a.id) - place(b.id) || a.at - b.at);
+}
+
+function needsNow() {
+  return arrange('needs', state.needs);
+}
+
+function notesOf(row) {
+  const key = keyOf(row);
+  const seen = new Set();
+  const sealed = [];
+  for (const text of row.notes || []) {
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    sealed.push({ id: `s:${key}:${hash(text)}`, text });
+  }
+  return arrange(`notes:${key}`, [...sealed, ...(state.notes[key] || [])]);
+}
+
+// The grip on the left: hold it and move the line up or down.
+function grab(grip, line, list, repaint) {
+  grip.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const host = line.parentElement;
+    const lines = () => [...host.children].filter((node) => node.classList.contains('item'));
+    const was = lines().map((node) => node.dataset.id);
+    const before = was.join('|');
+    grip.setPointerCapture(event.pointerId);
+    line.classList.add('lift');
+    state.armed = '';
+    const move = (ev) => {
+      const others = lines().filter((node) => node !== line);
+      const below = others.find((node) => {
+        const box = node.getBoundingClientRect();
+        return ev.clientY < box.top + box.height / 2;
+      });
+      if (below) host.insertBefore(line, below);
+      else if (others.length) others[others.length - 1].after(line);
+    };
+    const drop = () => {
+      grip.removeEventListener('pointermove', move);
+      grip.removeEventListener('pointerup', drop);
+      grip.removeEventListener('pointercancel', drop);
+      line.classList.remove('lift');
+      const ids = lines().map((node) => node.dataset.id);
+      if (ids.join('|') !== before) act({ t: 'order', list, ids }, { t: 'order', list, ids: was });
+      repaint();
+    };
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', drop);
+    grip.addEventListener('pointercancel', drop);
+  });
+}
+
+// One line: the grip and the lift-out tab on the left, then anything the list
+// puts before the words, then the words. A tap on the words opens them.
+function itemLine(list, item, repaint, { lead = [], cls = '' } = {}) {
+  const line = el('div', `line item ${cls}`.trim());
+  line.dataset.id = item.id;
+  const grip = el('span', 'grip', '=');
+  grip.setAttribute('aria-label', 'hold and move this line');
+  grab(grip, line, list, repaint);
+  const armed = state.armed === item.id;
+  const cut = button(armed ? 'cut armed' : 'cut', armed ? 'DEL?' : 'x', (event) => {
+    event.stopPropagation();
+    if (!armed) {
+      state.armed = item.id;
+      state.editing = '';
+      repaint();
+      return;
+    }
+    state.armed = '';
+    act({ t: 'gone', id: item.id, v: true }, { t: 'gone', id: item.id, v: false });
+    repaint();
+  });
+  cut.setAttribute('aria-label', armed ? 'tap again to take this line out' : 'take this line out');
+  line.append(grip, cut, ...lead);
+  if (state.editing === item.id) {
+    const input = el('input', 'edit');
+    Object.assign(input, { type: 'text', value: item.text, autocomplete: 'off', enterKeyHint: 'done' });
+    input.dataset.hold = '1';
+    let closed = false;
+    const close = (keep) => {
+      if (closed) return;
+      closed = true;
+      const text = input.value.trim();
+      state.editing = '';
+      if (keep && text && text !== item.text) act({ t: 'edit', id: item.id, text }, { t: 'edit', id: item.id, text: item.text });
+      repaint();
+    };
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') close(true);
+      if (event.key === 'Escape') close(false);
+    });
+    input.addEventListener('blur', () => close(true));
+    line.append(input);
+  } else {
+    const words = el('div', 'words', item.text);
+    words.addEventListener('click', () => {
+      state.editing = item.id;
+      state.armed = '';
+      repaint();
+      const input = document.querySelector('input.edit');
+      if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
+    });
+    line.append(words);
+  }
+  return line;
 }
 
 function send(row) {
@@ -292,9 +474,23 @@ function fold(row) {
   if (analyzer) acts.append(link('ANALYZER', analyzer));
   if (row.mine && !shared) acts.append(button('', 'SEND', () => send(row)));
   if (acts.children.length) box.append(acts);
-  for (const line of [row.last_contacted, ...(row.notes || [])]) {
-    if (line) box.append(el('p', 'note', line));
-  }
+  if (row.last_contacted) box.append(el('p', 'note', row.last_contacted));
+  const key = keyOf(row);
+  const notes = el('div', 'notes');
+  for (const note of notesOf(row)) notes.append(itemLine(`notes:${key}`, note, paintList));
+  const input = el('input', 'addnote');
+  Object.assign(input, { type: 'text', placeholder: 'add a note', autocomplete: 'off', enterKeyHint: 'done' });
+  input.dataset.hold = '1';
+  input.addEventListener('keydown', (event) => {
+    const text = input.value.trim();
+    if (event.key !== 'Enter' || !text) return;
+    const id = fresh('note');
+    act({ t: 'note', k: key, id, text }, { t: 'gone', id, v: true });
+    paintList();
+    document.querySelector('.fold .addnote')?.focus();
+  });
+  notes.append(input);
+  box.append(notes);
   return box;
 }
 
@@ -493,7 +689,8 @@ function openAdd() {
 
 function paintNext() {
   const host = document.querySelector('#next');
-  const todo = state.needs.find((need) => !state.did[need.id]);
+  const needs = needsNow();
+  const todo = needs.find((need) => !state.did[need.id]);
   const head = button('next', 'NEXT', () => {
     state.needsOpen = !state.needsOpen;
     paintNext();
@@ -501,25 +698,25 @@ function paintNext() {
   if (todo) head.append(el('span', '', todo.text));
   const nodes = [head];
   if (state.needsOpen) {
-    for (const need of state.needs) {
+    for (const need of needs) {
       const done = Boolean(state.did[need.id]);
-      const line = el('div', done ? 'line done' : 'line');
       const box = button('box', '', () => {
         record({ t: 'did', id: need.id, v: !done });
         paintNext();
       });
       box.append(orb(done ? 'SIGNED' : 'NEW'));
-      line.append(box, el('div', 'need', need.text));
-      nodes.push(line);
+      nodes.push(itemLine('needs', need, paintNext, { lead: [box], cls: done ? 'done' : '' }));
     }
-    const input = el('input');
+    const input = el('input', 'addstep');
     Object.assign(input, { type: 'text', placeholder: 'add a step', autocomplete: 'off', enterKeyHint: 'done' });
+    input.dataset.hold = '1';
     input.addEventListener('keydown', (event) => {
       const text = input.value.trim();
       if (event.key !== 'Enter' || !text) return;
-      record({ t: 'need', id: `need:${Date.now()}${Math.random().toString(36).slice(2, 6)}`, text });
+      const id = fresh('need');
+      act({ t: 'need', id, text }, { t: 'gone', id, v: true });
       paintNext();
-      document.querySelector('#next input').focus();
+      document.querySelector('#next .addstep').focus();
     });
     nodes.push(input);
   }
@@ -568,7 +765,9 @@ function paint() {
   list.id = 'list';
   const next = el('div');
   next.id = 'next';
-  app.replaceChildren(top, next, search, list, button('plus', '+', openAdd));
+  const back = button('undo', 'UNDO', undo);
+  back.hidden = !state.undo.length;
+  app.replaceChildren(top, next, search, list, back, button('plus', '+', openAdd));
   paintNext();
   paintList();
 }
