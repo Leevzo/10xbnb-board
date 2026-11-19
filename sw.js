@@ -1,4 +1,4 @@
-const CACHE = 'board-1';
+const CACHE = 'board-2';
 const FILES = [
   './',
   './index.html',
@@ -17,8 +17,10 @@ const FILES = [
   './fonts/pixelta.ttf',
 ];
 
+// A new worker takes over at once, so no phone is held on an old one.
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(FILES)));
+  self.skipWaiting();
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(FILES)).catch(() => {}));
 });
 
 self.addEventListener('activate', (event) => {
@@ -34,6 +36,8 @@ self.addEventListener('message', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin || event.request.method !== 'GET') return;
+  // Pages and the July list always come straight from the shelf.
+  if (event.request.mode === 'navigate' || url.pathname.includes('/july/')) return;
   event.respondWith((async () => {
     try {
       const fresh = await fetch(event.request);
