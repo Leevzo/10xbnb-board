@@ -22,6 +22,12 @@ await new Promise((done) => {
 });
 import(`./july.js?v=${js}`);
 
+// The page's stamp at the foot of the list, so a phone can say which copy it runs.
+const stamp = document.createElement('p');
+stamp.className = 'build';
+stamp.textContent = `page ${(js || 'unknown').slice(-6)} · 11-18`;
+document.body.append(stamp);
+
 let asking = false;
 async function newer() {
   if (asking || document.visibilityState !== 'visible') return;
