@@ -49,11 +49,46 @@ def self_test():
     digest = hashlib.sha256(b"abc").hexdigest()
     if digest != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad":
         raise SystemExit("sha mismatch")
+    phone_self_test()
 
 
 def last10(value):
     digits = re.sub(r"\D", "", value or "")
     return digits[-10:] if len(digits) >= 10 else ""
+
+
+PHONE = re.compile(r"(?<!\d)(?:\+?1[\s.\-]*)?\(?(\d{3})\)?[\s.\-]*(\d{3})[\s.\-]*(\d{4})(?!\d)")
+CONTACT_WORDS = {"cts": "contact through site"}
+
+
+def phone_and_rest(value):
+    """A contact cell -> (ten digits or "", whatever else the cell says)."""
+    text = (value or "").strip()
+    if re.fullmatch(r"\d(?:\.\d+)?[eE]\+?\d+", text):
+        # Excel keeps a phone typed as a number in this short form.
+        text = str(int(float(text)))
+    found = PHONE.search(text)
+    if not found:
+        return "", CONTACT_WORDS.get(text.lower(), text)
+    rest = (text[:found.start()] + " " + text[found.end():]).strip(" :;,-")
+    return "".join(found.groups()), re.sub(r"\s+", " ", rest)
+
+
+def phone_self_test():
+    cases = {
+        "5.550001234E9": ("5550001234", ""),
+        "(555) 000-1234 x 105": ("5550001234", "x 105"),
+        "call or text: (555) 000-1234": ("5550001234", "call or text"),
+        "555-000-1234": ("5550001234", ""),
+        "1 555 000 1234": ("5550001234", ""),
+        "cts": ("", "contact through site"),
+        "email land lord": ("", "email land lord"),
+        "": ("", ""),
+    }
+    for cell, want in cases.items():
+        got = phone_and_rest(cell)
+        if got != want:
+            raise SystemExit(f"phone mismatch on a test cell: {got} != {want}")
 
 
 def sheet_status(value):
@@ -183,11 +218,11 @@ def build(records, today):
         starred = False
         contacted = None
         for rec in group:
-            found = last10(rec["contact"])
+            found, rest = phone_and_rest(rec["contact"])
             if found and found not in phones:
                 phones.append(found)
-            elif rec["contact"] and not found:
-                notes.append(rec["contact"])
+            if rest:
+                notes.append(rest)
             if rec["mark"]:
                 starred = True
                 notes.append(rec["mark"])
@@ -231,8 +266,8 @@ def build(records, today):
         prop.update(parse_address(title))
         if status in ("CONTACTED", "PITCHED"):
             prop["next_followup"] = contacted or today
-        if len(phones) > 1:
-            seen.append("second phone on the same listing")
+        for more in phones[1:]:
+            seen.append(f"other phone {more[:3]}-{more[3:6]}-{more[6:]}")
         properties.append(prop)
         note_rows.append(seen)
     return properties, note_rows

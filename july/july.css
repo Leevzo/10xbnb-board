@@ -150,6 +150,9 @@ input { min-height: var(--g5); padding: var(--g1) 0; }
 .fold { margin: 0; padding: 0 0 var(--g3) var(--g5); }
 .note { margin: 0 0 var(--g1); color: var(--dim); }
 .acts { display: flex; flex-wrap: wrap; gap: 0 var(--g4); }
+.move { margin: 0 0 var(--g3); }
+.movehead { margin: 0 0 var(--g1); letter-spacing: 0.06em; }
+.draft { margin: 0 0 var(--g1); user-select: text; -webkit-user-select: text; }
 .acts a { line-height: var(--g5); }
 .quiet { color: var(--dim); }
 

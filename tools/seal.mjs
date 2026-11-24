@@ -5,6 +5,7 @@
 //
 //   node tools/seal.mjs                 reads ~/Downloads/Leads.xlsx through seed.py
 //   node tools/seal.mjs --stdin --out X reads [{...property, notes:[]}] JSON on stdin
+//   node tools/seal.mjs --keep          seals again with the same key: same link, same code
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -96,10 +97,70 @@ async function code() {
   }
 }
 
-const pin = await code();
+// --keep: seal again with the SAME key, so the link already sent and every
+// phone that already opened the list keep working. The link half comes from
+// the old link, the salt from the old file, and the code must open the old
+// file before anything is written.
+const keep = args.includes('--keep');
+
+function askLine(label) {
+  return new Promise((resolve, reject) => {
+    const input = process.stdin;
+    if (!input.isTTY) return reject(new Error('needs a terminal to ask for the link'));
+    process.stdout.write(label);
+    input.setRawMode(true);
+    input.resume();
+    let typed = '';
+    const onData = (chunk) => {
+      for (const ch of chunk.toString('utf8')) {
+        if (ch === '\r' || ch === '\n') {
+          input.setRawMode(false);
+          input.pause();
+          input.off('data', onData);
+          process.stdout.write('\n');
+          return resolve(typed);
+        }
+        if (ch === '\u0003') process.exit(130);
+        if (ch === '\u007f' || ch === '\b') typed = typed.slice(0, -1);
+        else if (ch >= ' ') typed += ch;
+      }
+    };
+    input.on('data', onData);
+  });
+}
+
+async function oldHalf() {
+  const file = flag('--link-file');
+  const text = file ? readFileSync(file, 'utf8') : await askLine('Paste the link you sent Lon, then return (it will not show): ');
+  const tail = (text.trim().split('#')[1] || '').split('~')[0];
+  const bytes = new Uint8Array(Buffer.from(tail, 'base64url'));
+  if (bytes.length !== 32) throw new Error('that is not the whole link. Nothing was changed.');
+  return bytes;
+}
+
+let old = null;
+let half;
+let salt;
+if (keep) {
+  old = new Uint8Array(readFileSync(out));
+  half = await oldHalf();
+  salt = old.slice(0, 16);
+} else {
+  half = webcrypto.getRandomValues(new Uint8Array(32));
+  salt = webcrypto.getRandomValues(new Uint8Array(16));
+}
+
+async function onePin() {
+  if (!keep || args.includes('--stdin')) return code();
+  for (;;) {
+    const typed = await ask('Type the number code for the door, then return: ');
+    if (typed.length >= 4) return typed;
+    console.log('Too short. Four numbers or more.');
+  }
+}
+
+const pin = await onePin();
 const body = new TextEncoder().encode(JSON.stringify({ made: new Date().toLocaleDateString('en-CA'), rows }));
-const half = webcrypto.getRandomValues(new Uint8Array(32));
-const salt = webcrypto.getRandomValues(new Uint8Array(16));
 const iv = webcrypto.getRandomValues(new Uint8Array(12));
 const mix = new Uint8Array(half.length + salt.length);
 mix.set(half, 0);
@@ -107,8 +168,30 @@ mix.set(salt, half.length);
 const base_key = await webcrypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
 const key = await webcrypto.subtle.deriveKey(
   { name: 'PBKDF2', hash: 'SHA-256', salt: mix, iterations: ITER },
-  base_key, { name: 'AES-GCM', length: 256 }, false, ['encrypt'],
+  base_key, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'],
 );
+if (keep) {
+  let before;
+  try {
+    const plain = await webcrypto.subtle.decrypt({ name: 'AES-GCM', iv: old.slice(16, 28) }, key, old.slice(28));
+    before = JSON.parse(new TextDecoder().decode(plain)).rows || [];
+  } catch {
+    console.log('That link and code do not open the list as it stands. Nothing was changed.');
+    process.exit(1);
+  }
+  const was = new Map(before.map((row) => [row.id || row.listing_url, row.owner_phone || '']));
+  let mended = 0;
+  let gone = 0;
+  for (const row of rows) {
+    const id = row.id || row.listing_url;
+    if (was.has(id) && was.get(id) !== (row.owner_phone || '')) mended += 1;
+    was.delete(id);
+  }
+  gone = was.size;
+  console.log(`opened the old list: ${before.length} rows`);
+  console.log(`phones changed ${mended}`);
+  console.log(`rows no longer present ${gone}`);
+}
 const sealed = new Uint8Array(await webcrypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, body));
 const file = new Uint8Array(salt.length + iv.length + sealed.length);
 file.set(salt, 0);
@@ -121,4 +204,5 @@ const linkOut = flag('--link-out');
 if (linkOut) writeFileSync(linkOut, `${link}\n`, { mode: 0o600 });
 console.log(`rows ${rows.length}`);
 console.log(`bytes ${file.length}`);
-console.log(linkOut ? 'SEALED. The door has its code. Go back to Orv.' : `link ${link}`);
+if (keep) console.log('SEALED AGAIN with the same key. The link already sent still opens it. Go back to Orv.');
+else console.log(linkOut ? 'SEALED. The door has its code. Go back to Orv.' : `link ${link}`);

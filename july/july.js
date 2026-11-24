@@ -502,8 +502,50 @@ function send(row) {
   location.href = `sms:?&body=${encodeURIComponent(text)}`;
 }
 
+// ---- the next move
+// Each colour carries the one move that comes next, in our own words. A NO has none.
+
+const MOVE = {
+  NEW: ['VET, THEN WRITE',
+    'Furnished · legal at that address · takes in 1.5× its yearly rent (three nearby listings) · inside Lon’s drive · the decider answers. Fails one: NO. Passes: send this within a day of the listing.'],
+  CONTACTED: ['THE 15-MINUTE CALL',
+    'Ask what it rents for, how long it has sat empty, is it furnished, what else they own. Show three real nearby listings. Say: nothing up front, a share only of what it earns, leave with 30 days’ notice. Ask for one thing: a walk-through with Lon this week.'],
+  PITCHED: ['THE WALK-THROUGH',
+    'Lon walks it with the owner. The one-page agreement is signed there or the next day. Ask what else they own and who else they know.'],
+  SIGNED: ['THE HAND-OFF',
+    'Write down: name, phone, best time · address, bedrooms, furnished · keys, lockbox, codes · the cut and the shortest stay · what it should take in · what the owner insisted on · the signed paper and the walk-through date. Then one group text to Lon.'],
+};
+
+function firstMessage(row) {
+  const first = (row.owner_name || '').trim().split(/\s+/)[0];
+  return `Hi${first ? ` ${first}` : ''}, I saw your place at ${titleOf(row)}. I run furnished stays for owners nearby. `
+    + 'You keep the place and it usually earns more than on a yearly lease. We handle guests and cleaning, '
+    + 'charge nothing up front, and only take a share of what it earns. Open to a 10-minute call?';
+}
+
+function move(row) {
+  const status = statusOf(row);
+  const step = MOVE[status];
+  if (!step) return null;
+  const box = el('div', 'move');
+  box.append(el('p', 'movehead', step[0]), el('p', 'note', step[1]));
+  if (status === 'NEW') {
+    const text = firstMessage(row);
+    box.append(el('p', 'draft', text));
+    const copy = button('', 'COPY', async () => {
+      try { await navigator.clipboard.writeText(text); copy.textContent = 'COPIED'; } catch { copy.textContent = 'HOLD TO COPY'; }
+    });
+    const acts = el('div', 'acts');
+    acts.append(copy);
+    box.append(acts);
+  }
+  return box;
+}
+
 function fold(row) {
   const box = el('div', 'fold');
+  const next = move(row);
+  if (next) box.append(next);
   const who = [row.owner_name, row.owner_phone].filter(Boolean).join(' · ');
   if (who) box.append(el('p', '', who));
   const acts = el('div', 'acts');
